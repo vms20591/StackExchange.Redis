@@ -95,9 +95,6 @@ namespace StackExchange.Redis
         public static readonly ResultProcessor<EndPoint>
             SentinelMasterEndpoint = new SentinelGetMasterAddressByNameProcessor();
 
-        public static readonly ResultProcessor<EndPoint[]>
-            SentinelAddressesEndPoints = new SentinelGetSentinelAddresses();
-
         public static readonly ResultProcessor<KeyValuePair<string, string>[][]>
             SentinelArrayOfArrays = new SentinelArrayOfArraysProcessor();
 
@@ -1399,11 +1396,6 @@ The coordinates as a two items x,y array (longitude,latitude).
                             SetResult(message, null);
                             return true;
                         }
-                        break;
-                    case ResultType.SimpleString:
-                        //We don't want to blow up if the master is not found
-                        if (result.IsNull)
-                            return true;
                         break;
                 }
                 return false;
