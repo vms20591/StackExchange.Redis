@@ -1287,6 +1287,27 @@ namespace StackExchange.Redis
                         {
                             Trace("Testing: " + Format.ToString(endpoints[i]));
                             var server = GetServerEndPoint(endpoints[i]);
+
+                            /* - Fix issue in subscription during Redis Sentinel failover -
+                             
+                                It seems that during Sentinel failover, the lastest master is subscribed
+                            to any channels from the previous master. But before that, the master server isn't
+                            selected during the "SelectServer" strategy, because it doesn't have a "subscription"
+                            PhysicalBridge associated. This is not an issue during ConnectionMultiplexer"Connect"
+                            or "ConnectAsync" call as server activation is done.
+                            
+                            The following piece of code checks if the current server is a Master and activates the
+                            "subscription" PhysicalBridge.
+
+                            */
+                            if (!server.IsSlave && server.EndPoint.Equals(currentSentinelMasterEndPoint))
+                            {
+                                if (CommandMap.IsAvailable(RedisCommand.SUBSCRIBE))
+                                {
+                                    server.Activate(ConnectionType.Subscription, null);
+                                }
+                            }
+
                             //server.ReportNextFailure();
                             servers[i] = server;
                             if (reconfigureAll && server.IsConnected)
@@ -1294,7 +1315,7 @@ namespace StackExchange.Redis
                                 LogLocked(log, "Refreshing {0}...", Format.ToString(server.EndPoint));
                                 // note that these will be processed synchronously *BEFORE* the tracer is processed,
                                 // so we know that the configuration will be up to date if we see the tracer
-                                server.AutoConfigure(null);
+                               server.AutoConfigure(null);
                             }
                             available[i] = server.SendTracer(log);
                             if (useTieBreakers)
@@ -1340,7 +1361,7 @@ namespace StackExchange.Redis
                                 {
                                     servers[i].ClearUnselectable(UnselectableFlags.DidNotRespond);
                                     LogLocked(log, "{0} returned with success", Format.ToString(endpoints[i]));
-                                    
+
                                     // count the server types
                                     switch (server.ServerType)
                                     {
@@ -1963,9 +1984,11 @@ namespace StackExchange.Redis
     
             try
             {
+                var s = connection.GetServer(e.EndPoint);
+
                 // Verify that the reconnected endpoint is a master,
                 // and the correct one otherwise we should reconnect
-                if(connection.GetServer(e.EndPoint).IsSlave || e.EndPoint != connection.currentSentinelMasterEndPoint)
+                if (s.IsSlave || !e.EndPoint.Equals(connection.currentSentinelMasterEndPoint))
                 {
                     // Wait for things to smooth out
                     Thread.Sleep(200);
