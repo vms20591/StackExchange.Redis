@@ -1366,7 +1366,7 @@ namespace StackExchange.Redis
                             "subscription" PhysicalBridge.
 
                             */
-                            if (!server.IsSlave && server.EndPoint.Equals(currentSentinelMasterEndPoint))
+                            if (!server.IsSlave && server.EndPoint == currentSentinelMasterEndPoint)
                             {
                                 if (CommandMap.IsAvailable(RedisCommand.SUBSCRIBE))
                                 {
@@ -2050,11 +2050,9 @@ namespace StackExchange.Redis
     
             try
             {
-                var s = connection.GetServer(e.EndPoint);
-
                 // Verify that the reconnected endpoint is a master,
                 // and the correct one otherwise we should reconnect
-                if (s.IsSlave || !e.EndPoint.Equals(connection.currentSentinelMasterEndPoint))
+                if (connection.GetServer(e.EndPoint).IsSlave || e.EndPoint != connection.currentSentinelMasterEndPoint)
                 {
                     // Wait for things to smooth out
                     Thread.Sleep(200);
@@ -2099,7 +2097,7 @@ namespace StackExchange.Redis
         internal EndPoint GetConfiguredMasterForService(String serviceName, int timeoutmillis = -1)
         {
             Task<EndPoint>[] sentinelMasters = this.serverSnapshot
-                        .Where(s => s.ServerType == ServerType.Sentinel)
+                        .Where(s => s.ServerType == ServerType.Sentinel && s.IsConnected)
                         .Select(s => this.GetServer(s.EndPoint).SentinelGetMasterAddressByNameAsync(serviceName))
                         .ToArray();
 
