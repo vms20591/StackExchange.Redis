@@ -54,6 +54,8 @@ namespace StackExchange.Redis
     {
         private static readonly string timeoutHelpLink = "https://github.com/StackExchange/StackExchange.Redis/tree/master/Docs/Timeouts.md";
 
+        public TextWriter textWriterDebug;
+
         private static TaskFactory _factory = null;
 
         /// <summary>
@@ -741,6 +743,10 @@ namespace StackExchange.Redis
             for (int i = 0; i < len; i++)
             {
                 var server = tmp[(int)(((uint)i + startOffset) % len)];
+
+                Trace("Trying server " + Format.ToString(server));
+                Trace(string.Format("serverType: {0}, server.serverType: {1}, command: {3}, flags: {4}, server.IsSelectable(command): {2}", serverType, server.ServerType, server.IsSelectable(command), command, flags));
+
                 if (server != null && server.ServerType == serverType && server.IsSelectable(command))
                 {
                     if (server.IsSlave)
@@ -768,6 +774,7 @@ namespace StackExchange.Redis
                     }
                 }
             }
+            
             return fallback;
         }
 
@@ -860,6 +867,7 @@ namespace StackExchange.Redis
             try
             {
                 var muxer = multiplexerFactory();
+                muxer.textWriterDebug = log;
                 killMe = muxer;
                 // note that task has timeouts internally, so it might take *just over* the regular timeout
                 var task = muxer.ReconfigureAsync(true, false, log, null, "connect");
@@ -1177,10 +1185,11 @@ namespace StackExchange.Redis
             LogLocked(log, "Sync timeouts: {0}; fire and forget: {1}; last heartbeat: {2}s ago",
                 Interlocked.Read(ref syncTimeouts), Interlocked.Read(ref fireAndForgets), LastHeartbeatSecondsAgo);
         }
-        internal async Task<bool> ReconfigureAsync(bool first, bool reconfigureAll, TextWriter log, EndPoint blame, string cause, bool publishReconfigure = false, CommandFlags publishReconfigureFlags = CommandFlags.None)
+        internal async Task<bool> ReconfigureAsync(bool first, bool reconfigureAll, TextWriter log, EndPoint blame, string cause, bool publishReconfigure = false, CommandFlags publishReconfigureFlags = CommandFlags.None, bool switchMasterCall = false)
         {
             if (isDisposed) throw new ObjectDisposedException(ToString());
             bool showStats = true;
+            bool subscriptionActivatedForMaster = false;
 
             if (log == null)
             {
@@ -1194,7 +1203,7 @@ namespace StackExchange.Redis
 
                 if (!ranThisCall)
                 {
-                    LogLocked(log, "Reconfiguration was already in progress");
+                    LogLocked(log, string.Format("Reconfiguration was already in progress for {0}, {1}", activeConfigCause, GetStatus()));
                     return false;
                 }
                 Trace("Starting reconfiguration...");
@@ -1300,11 +1309,17 @@ namespace StackExchange.Redis
                             "subscription" PhysicalBridge.
 
                             */
-                            if (!server.IsSlave && server.EndPoint.Equals(currentSentinelMasterEndPoint))
+                            textWriterDebug?.WriteLine("ConnectionMultiplexer.ReconfigureAsync: !server.IsSlave && server.EndPoint == currentSentinelMasterEndPoint : {0}, server.isSlave : {1}, server.Endpoint: {2}, currentSentinelMasterEndPoint : {3}, this.Configuration: {4}", (!server.IsSlave && server.EndPoint == currentSentinelMasterEndPoint), server.IsSlave, server.EndPoint, currentSentinelMasterEndPoint, Configuration);
+
+                            if (!server.IsSlave && server.EndPoint == currentSentinelMasterEndPoint)
                             {
                                 if (CommandMap.IsAvailable(RedisCommand.SUBSCRIBE))
                                 {
+                                    textWriterDebug?.WriteLine("ConnectionMultiplexer.ReconfigureAsync: 'Subscribe' command is available, activating 'Subscription' for: {0}, this.Configuration: {1}", server.EndPoint, Configuration);
+
                                     server.Activate(ConnectionType.Subscription, null);
+
+                                    subscriptionActivatedForMaster = true;
                                 }
                             }
 
@@ -1346,6 +1361,7 @@ namespace StackExchange.Redis
                                 foreach (var ex in aex.InnerExceptions)
                                 {
                                     LogLocked(log, "{0} faulted: {1}", Format.ToString(endpoints[i]), ex.Message);
+
                                     failureMessage = ex.Message;
                                 }
                             }
@@ -1470,6 +1486,7 @@ namespace StackExchange.Redis
                     if (!first)
                     {
                         long subscriptionChanges = ValidateSubscriptions();
+                        textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.ReconfigureAsync: subscriptionChanges: {0}, this.configuration: {1}", subscriptionChanges, Configuration));
                         if (subscriptionChanges == 0)
                         {
                             LogLocked(log, "No subscription changes necessary");
@@ -1507,6 +1524,7 @@ namespace StackExchange.Redis
                 if (first)
                 {
                     LogLocked(log, "Starting heartbeat...");
+                    Trace("Starting heartbeat...");
                     pulse = new Timer(heartbeat, this, MillisecondsPerHeartbeat, MillisecondsPerHeartbeat);
                 }
                 if(publishReconfigure)
@@ -1519,6 +1537,18 @@ namespace StackExchange.Redis
                     catch
                     { }
                 }
+
+                if (switchMasterCall)
+                {
+                    if (subscriptionActivatedForMaster)
+                    {
+                        textWriterDebug?.WriteLine("ConnectionMultiplexer.ReconfigureAsync: This is a +switch-master event and subscription activated for {0}, this.Configuration: {1}", currentSentinelMasterEndPoint, Configuration);
+                    }else
+                    {
+                        textWriterDebug?.WriteLine("ConnectionMultiplexer.ReconfigureAsync: This is a +switch-master event and subscription not activated for {0} due to some reason, this.Configuration: {1}", currentSentinelMasterEndPoint, Configuration);
+                    }
+                }
+
                 return true;
 
             } catch (Exception ex)
@@ -1531,7 +1561,11 @@ namespace StackExchange.Redis
                 Trace("Exiting reconfiguration...");
                 OnTraceLog(log);
                 if (ranThisCall) Interlocked.Exchange(ref activeConfigCause, null);
-                if (!first) OnConfigurationChanged(blame);
+                if (!first)
+                {
+                    textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.ReconfigureAsync: configuration changed due to  {0}. this.configuration: {1}", blame, Configuration));
+                    OnConfigurationChanged(blame);
+                }
                 Trace("Reconfiguration exited");
             }
         }
@@ -1557,6 +1591,7 @@ namespace StackExchange.Redis
             var snapshot = serverSnapshot;
             foreach(var server in snapshot)
             {
+                Trace("ServerEndpoint: " + Format.ToString(server.EndPoint));
                 server.ResetNonConnected();
             }
         }
@@ -1752,13 +1787,15 @@ namespace StackExchange.Redis
         private bool TryPushMessageToBridge<T>(Message message, ResultProcessor<T> processor, ResultBox<T> resultBox, ref ServerEndPoint server)
         {
             message.SetSource(processor, resultBox);
-
+            
             if (server == null)
             {   // infer a server automatically
+                if(message.CommandAndKey.Equals("EVAL")) Trace("server is null.");
                 server = SelectServer(message);
             }
             else // a server was specified; do we trust their choice, though?
             {
+                if (message.CommandAndKey.Equals("EVAL")) Trace("server: " + server.Summary());
 
                 if (message.IsMasterOnly() && server.IsSlave)
                 {
@@ -1785,6 +1822,8 @@ namespace StackExchange.Redis
             
             if (server != null)
             {
+                if (message.CommandAndKey.Equals("EVAL")) Trace("server: " + server.Summary());
+                if (message.CommandAndKey.Equals("EVAL")) Trace("message: " + message.ToString());
                 var profCtx = profiler?.GetContext();
                 if (profCtx != null)
                 {
@@ -1805,6 +1844,7 @@ namespace StackExchange.Redis
                 Trace("Queueing on server: " + message);
                 if (server.TryEnqueue(message)) return true;
             }
+
             Trace("No server or server unavailable - aborting: " + message);
             return false;
         }
@@ -1884,23 +1924,46 @@ namespace StackExchange.Redis
                             // Is the connection still valid?
                             if(child.IsDisposed)
                             {
+                                textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.InitializeSentinel: This is a +switch-master event but the ConnectionMultiplexer is disposed, so no master switch. this.Configuration: {0}, child.Configuration: {1}", Configuration, child.Configuration));
+
                                 child.ConnectionFailed -= OnManagedConnectionFailed;
                                 child.ConnectionRestored -= OnManagedConnectionRestored;
                                 sentinelConnectionChildren.Remove(messageParts[0]);
                             }
                             else
                             {
-                                SwitchMaster(switchBlame, sentinelConnectionChildren[messageParts[0]]);
+                                textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.InitializeSentinel: This is a +switch-master event so switching master. child.configuration: {0}, this.configuration: {1}", child.Configuration, Configuration));
+                                SwitchMaster(switchBlame, sentinelConnectionChildren[messageParts[0]], log);
                             }
+                        }else
+                        {
+                            textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.InitializeSentinel: This is a +switch-master event but sentinelConnectionChildren doesn't have a ConnectionMultiplexer, so no master switch."));
                         }
                     }
                 });
+
+                var subscribedEndpoint = sub.SubscribedEndpoint("+switch-master");
+
+                textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.InitializeSentinel: Subscribed owner of +switch-master event is {0}", Format.ToString(subscribedEndpoint)));
             }  
 
             // If we lose connection to a sentinel server,
             // We need to reconfigure to make sure we still have
             // a subscription to the +switch-master channel.
             this.ConnectionFailed += (sender, e) => {
+                ConnectionMultiplexer mux = null;
+                if(sender is ConnectionMultiplexer)
+                {
+                    mux = (ConnectionMultiplexer)sender;
+                }
+                if(mux != null)
+                {
+                    textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.InitializeSentinel: Sentinel connection lost, reconfiguring, sender.Configuration: {0}, ConnectionFailedEventArgs.ConnectionType: {1}, ConnectionFailedEventArgs.Endpoint: {2}", mux.Configuration, e.ConnectionType, e.EndPoint));
+                }
+                else
+                {
+                    textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.InitializeSentinel: Sentinel connection lost, reconfiguring: {0}, {1}", e.ConnectionType, e.EndPoint));
+                }
                 // Reconfigure to get subscriptions back online
                 ReconfigureAsync(false, true, log, e.EndPoint, "Lost sentinel connection", false).Wait();
             };
@@ -1951,6 +2014,8 @@ namespace StackExchange.Redis
 
             ConnectionMultiplexer connection = ConnectionMultiplexer.Connect(config, log);
 
+            connection.textWriterDebug = log;
+
             // Attach to reconnect event to ensure proper connection to the new master
             connection.ConnectionRestored += OnManagedConnectionRestored;
 
@@ -1978,32 +2043,37 @@ namespace StackExchange.Redis
                 connection.sentinelMasterReconnectTimer = null;
             }
 
+            textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.OnManagedConnectionRestored: endpoint: {1}, sender.configuration: {0}, this.configuration: {2}", connection.Configuration, e.EndPoint, Configuration));
+            Trace(string.Format("sender: {0}, \n\t\t configuration: {1}, \n\t\t endpoint: {2}", connection.activeConfigCause, connection.Configuration, e.EndPoint));
             // Run a switch to make sure we have update-to-date 
             // information about which master we should connect to
             SwitchMaster(e.EndPoint, connection);
     
             try
             {
-                var s = connection.GetServer(e.EndPoint);
-
                 // Verify that the reconnected endpoint is a master,
                 // and the correct one otherwise we should reconnect
-                if (s.IsSlave || !e.EndPoint.Equals(connection.currentSentinelMasterEndPoint))
+                if (connection.GetServer(e.EndPoint).IsSlave || e.EndPoint != connection.currentSentinelMasterEndPoint)
                 {
                     // Wait for things to smooth out
                     Thread.Sleep(200);
+
+                    Trace("This isn't a master, so try connecting again");
+                    textWriterDebug?.WriteLine("ConnectionMultiplexer.OnManagedConnectionRestored: This isn't a master, so try master switch again");
 
                     // This isn't a master, so try connecting again
                     SwitchMaster(e.EndPoint, connection);
                 }
             }
-            catch(Exception)
+            catch(Exception exp)
             {
                 // If we get here it means that we tried to reconnect to a server that is no longer
                 // considered a master by Sentinel and was removed from the list of endpoints.
 
                 // Wait for things to smooth out
                 Thread.Sleep(200);
+
+                textWriterDebug?.WriteLine("ConnectionMultiplexer.OnManagedConnectionRestored: Exception caught, so try master switch again: " + exp);
 
                 // If we caught an exception, we may have gotten a stale endpoint
                 // we are not aware of, so retry
@@ -2014,15 +2084,18 @@ namespace StackExchange.Redis
         internal void OnManagedConnectionFailed(Object sender, ConnectionFailedEventArgs e)
         {
             ConnectionMultiplexer connection = (ConnectionMultiplexer)sender;
+
+            textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.OnManagedConnectionFailed: sender.activeConfigCause: {0}, endpoint: {2}, sender.configuration: {1}, this.configuration: {3}", connection.activeConfigCause, connection.Configuration, e.EndPoint, Configuration));
             // Periodically check to see if we can reconnect to the proper master.
             // This is here in case we lost our subscription to a good sentinel instance
             // or if we miss the published master change
-            if(connection.sentinelMasterReconnectTimer == null)
+            if (connection.sentinelMasterReconnectTimer == null)
             {
                 connection.sentinelMasterReconnectTimer = new System.Timers.Timer(1000);
                 connection.sentinelMasterReconnectTimer.AutoReset = true;                            
                 
                 connection.sentinelMasterReconnectTimer.Elapsed += (o, t) => {
+                    textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.OnManagedConnectionFailed: initiating a master switch, this.Configuration: {0}, connection.Configuration: {1}", Configuration, connection.Configuration));
                     SwitchMaster(e.EndPoint, connection);
                 };
                             
@@ -2032,12 +2105,16 @@ namespace StackExchange.Redis
 
         internal EndPoint GetConfiguredMasterForService(String serviceName, int timeoutmillis = -1)
         {
+            textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.GetConfiguredMasterForService: Trying to find out the current master for serviceName: {0}, this.Configuration: {1}", serviceName, Configuration));
+
             Task<EndPoint>[] sentinelMasters = this.serverSnapshot
-                        .Where(s => s.ServerType == ServerType.Sentinel)
+                        .Where(s => s.ServerType == ServerType.Sentinel && s.IsConnected)
                         .Select(s => this.GetServer(s.EndPoint).SentinelGetMasterAddressByNameAsync(serviceName))
                         .ToArray();
 
-            Task<Task<EndPoint>> firstCompleteRequest = WaitFirstNonNullIgnoreErrorsAsync(sentinelMasters);
+            textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.GetConfiguredMasterForService: No. of sentinelMaster for {0} is {1}, this.Configuraiton: {2}", serviceName, sentinelMasters?.Length, Configuration));
+
+            Task<Task<EndPoint>> firstCompleteRequest = WaitFirstNonNullIgnoreErrorsAsync(sentinelMasters, textWriterDebug);
             if (!firstCompleteRequest.Wait(timeoutmillis))
                 throw new TimeoutException("Timeout resolving master for service");
             if (firstCompleteRequest.Result.Result == null)
@@ -2046,7 +2123,7 @@ namespace StackExchange.Redis
             return firstCompleteRequest.Result.Result;
         }	
 
-        private static async Task<Task<T>> WaitFirstNonNullIgnoreErrorsAsync<T>(Task<T>[] tasks)
+        private static async Task<Task<T>> WaitFirstNonNullIgnoreErrorsAsync<T>(Task<T>[] tasks, TextWriter log = null)
         {
             if (tasks == null) throw new ArgumentNullException("tasks");
             if (tasks.Length == 0) return null;
@@ -2069,8 +2146,10 @@ namespace StackExchange.Redis
                         return (Task<T>)result;
                 }
             }
-            catch
-            { }
+            catch(Exception exp)
+            {
+                log?.WriteLine(string.Format("ConnectionMultiplexer.WaitFirstNonNullIgnoreErrorsAsync: Exception occurred completing task: {0}", exp));
+            }
 
             return null;
         }
@@ -2092,6 +2171,8 @@ namespace StackExchange.Redis
             do 
             {
                 masterEndPoint = GetConfiguredMasterForService(serviceName);
+                Trace("masterEndPoint: " + masterEndPoint);
+                textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.SwitchMaster: masterEndPoint: {0}", masterEndPoint));
             } while(masterEndPoint == null);
 
             connection.currentSentinelMasterEndPoint = masterEndPoint;
@@ -2103,8 +2184,13 @@ namespace StackExchange.Redis
                 connection.serverSnapshot = new ServerEndPoint[0];
                 connection.configuration.EndPoints.Add(masterEndPoint);
                 Trace(string.Format("Switching master to {0}", masterEndPoint));
+                textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.SwitchMaster: Switching master to {0}", masterEndPoint));
+
                 // Trigger a reconfigure                            
-                connection.ReconfigureAsync(false, false, log, switchBlame, string.Format("master switch {0}", serviceName), false, CommandFlags.PreferMaster).Wait();
+                connection.ReconfigureAsync(false, false, log, switchBlame, string.Format("master switch {0}", serviceName), false, CommandFlags.PreferMaster, true).Wait();
+            }else
+            {
+                textWriterDebug?.WriteLine(string.Format("ConnectionMultiplexer.SwitchMaster: Oops! ReconfigureAsync() wont be called for: {0} due to {1}", masterEndPoint, switchBlame));
             }
             
             UpdateSentinelAddressList(serviceName);        

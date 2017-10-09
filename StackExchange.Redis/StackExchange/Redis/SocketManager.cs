@@ -204,7 +204,7 @@ namespace StackExchange.Redis
                             return socket.BeginConnect(dnsEndpoint.Host, dnsEndpoint.Port, cb, tuple);
                         },
                         ar => {
-                            multiplexer.LogLocked(log, "EndConnect: {0}", formattedEndpoint);                            
+                            multiplexer.LogLocked(log, "EndConnect: {0}", formattedEndpoint);
                             EndConnectImpl(ar, multiplexer, log, tuple);
                             multiplexer.LogLocked(log, "Connect complete: {0}", formattedEndpoint);
                         },

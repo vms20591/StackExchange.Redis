@@ -187,7 +187,13 @@ namespace StackExchange.Redis
                 var cmd = channel.IsPatternBased ? RedisCommand.PSUBSCRIBE : RedisCommand.SUBSCRIBE;
                 var selected = multiplexer.SelectServer(-1, cmd, CommandFlags.DemandMaster, default(RedisKey));
 
+                multiplexer.textWriterDebug?.WriteLine(string.Format("RedisSubscriber.SubscribeToServer: Channel: {0}", channel));
+
+                multiplexer.textWriterDebug?.WriteLine(string.Format("RedisSubscriber.SubscribeToServer: selected(server): {0}", Format.ToString(selected)));
+
                 if (selected == null || Interlocked.CompareExchange(ref owner, selected, null) != null) return null;
+
+                multiplexer.textWriterDebug?.WriteLine(string.Format("RedisSubscriber.SubscribeToServer: Subscribe to {0} on Server {1} ", channel, Format.ToString(selected)));
 
                 var msg = Message.Create(-1, flags, cmd, channel);
 
@@ -196,6 +202,8 @@ namespace StackExchange.Redis
 
             public Task UnsubscribeFromServer(RedisChannel channel, CommandFlags flags, object asyncState, bool internalCall)
             {
+                System.Diagnostics.Debug.WriteLine(string.Format("[{0}] > RedisSubscriber.UnsubscribeFromServer: Unsubscribe from '{1}' on Server {2}", DateTime.Now, channel, Format.ToString(owner)));
+
                 var oldOwner = Interlocked.Exchange(ref owner, null);
                 if (oldOwner == null) return null;
 

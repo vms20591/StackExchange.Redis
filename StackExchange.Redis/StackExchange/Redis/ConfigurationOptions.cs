@@ -397,7 +397,7 @@ namespace StackExchange.Redis
             Append(sb, OptionKeys.ConfigCheckSeconds, configCheckSeconds);
             Append(sb, OptionKeys.ResponseTimeout, responseTimeout);
             Append(sb, OptionKeys.DefaultDatabase, defaultDatabase);
-            commandMap?.AppendDeltas(sb);
+            //commandMap?.AppendDeltas(sb);
             return sb.ToString();
         }
 

@@ -119,6 +119,7 @@ namespace StackExchange.Redis
 
         public bool TryEnqueue(Message message, bool isSlave)
         {
+            if(message.CommandAndKey.Equals("EVAL")) Trace(message.ToString());
             if (isDisposed) throw new ObjectDisposedException(Name);
             if (!IsConnected)
             {
@@ -313,6 +314,7 @@ namespace StackExchange.Redis
         internal void OnDisconnected(ConnectionFailureType failureType, PhysicalConnection connection, out bool isCurrent, out State oldState)
         {
             Trace("OnDisconnected");
+            Trace("failureType: " + failureType);
 
             // if the next thing in the pipe is a PING, we can tell it that we failed (this really helps spot doomed connects)
             int count;
@@ -522,6 +524,11 @@ namespace StackExchange.Redis
         internal bool WriteMessageDirect(PhysicalConnection tmp, Message next)
         {
             Trace("Writing: " + next);
+            if (next.CommandAndKey.Equals("EVAL"))
+            {
+                Trace("PhysicalConnection: " + tmp);
+            }
+            
             if (next is IMultiMessage)
             {
                 SelectDatabase(tmp, next); // need to switch database *before* the transaction
@@ -586,6 +593,7 @@ namespace StackExchange.Redis
                         }
                         return WriteResult.QueueEmptyAfterWrite;
                     }
+                    if (next.CommandAndKey.Equals("EVAL")) Trace("next: " + next.ToString());
                     last = next;
 
                     Trace("Now pending: " + GetPendingCount());
@@ -609,6 +617,7 @@ namespace StackExchange.Redis
             {
                 if (conn != null)
                 {
+                    Trace("conn.RecordConnectionFailed(ConnectionFailureType.SocketFailure, ex)");
                     conn.RecordConnectionFailed(ConnectionFailureType.SocketFailure, ex);
                     conn = null;
                 }
