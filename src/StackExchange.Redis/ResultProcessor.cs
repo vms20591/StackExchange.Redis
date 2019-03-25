@@ -125,9 +125,6 @@ namespace StackExchange.Redis
         public static readonly ResultProcessor<EndPoint>
             SentinelMasterEndpoint = new SentinelGetMasterAddressByNameProcessor();
 
-        public static readonly ResultProcessor<EndPoint[]>
-            SentinelAddressesEndPoints = new SentinelGetSentinelAddresses();
-
         public static readonly ResultProcessor<KeyValuePair<string, string>[][]>
             SentinelArrayOfArrays = new SentinelArrayOfArraysProcessor();
 
