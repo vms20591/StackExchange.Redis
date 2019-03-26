@@ -1915,7 +1915,7 @@ namespace StackExchange.Redis
 
         internal EndPoint currentSentinelMasterEndPoint = null;
 
-        internal System.Timers.Timer sentinelMasterReconnectTimer = null;
+        internal System.Threading.Timer sentinelMasterReconnectTimer = null;
         
         internal Dictionary<String, ConnectionMultiplexer> sentinelConnectionChildren = null;
 
@@ -2040,7 +2040,7 @@ namespace StackExchange.Redis
 
             if(connection.sentinelMasterReconnectTimer != null)
             {
-                connection.sentinelMasterReconnectTimer.Stop();
+                connection.sentinelMasterReconnectTimer.Change(Timeout.Infinite, Timeout.Infinite);
                 connection.sentinelMasterReconnectTimer = null;
             }
 
@@ -2083,14 +2083,9 @@ namespace StackExchange.Redis
             // or if we miss the published master change
             if(connection.sentinelMasterReconnectTimer == null)
             {
-                connection.sentinelMasterReconnectTimer = new System.Timers.Timer(1000);
-                connection.sentinelMasterReconnectTimer.AutoReset = true;                            
-                
-                connection.sentinelMasterReconnectTimer.Elapsed += (o, t) => {
+                connection.sentinelMasterReconnectTimer = new System.Threading.Timer(obj => {
                     SwitchMaster(e.EndPoint, connection);
-                };
-                            
-                connection.sentinelMasterReconnectTimer.Start();
+                }, null, 0, 1000);
             }   
         }
 
@@ -2144,6 +2139,7 @@ namespace StackExchange.Redis
         /// </summary>
         /// <param name="switchBlame">the endpoing responsible for the switch</param>
         /// <param name="connection">the connection that should be switched over to a new master endpoint</param>
+        /// <param name="log"></param>
         internal void SwitchMaster(EndPoint switchBlame, ConnectionMultiplexer connection, TextWriter log = null)
         {            
             if(log == null) log = TextWriter.Null;
